@@ -1,8 +1,8 @@
 ---
 name: b20-swap-skill
-description: Buy or sell any TwentyPad Instant Launcher B20 on Base Uniswap v4. Use when the user wants to swap TFROG, TwentyFrog, a TwentyPad B20, a token from factory 0x15a3f3ABb733868d193b511dd5b91f82ebF888A3, or any B20 whose pool uses hook 0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc. Do not use Bankr default DEX routing for these tokens.
-tags: [b20, base, swap, twentypad, uniswap-v4, tfrog]
-version: 2
+description: Buy or sell any TwentyPad Instant Launcher B20 on Base Uniswap v4, including ETH on a USDC-paired token and USDC on an ETH-paired token via an ETH/USDC hop plus the hook pool. Use when the user wants to swap TFROG, TwentyFrog, a TwentyPad B20, a token from factory 0x15a3f3ABb733868d193b511dd5b91f82ebF888A3, or any B20 whose pool uses hook 0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc. Do not use Bankr default DEX routing for the TwentyPad leg.
+tags: [b20, base, swap, twentypad, uniswap-v4, tfrog, cross-quote]
+version: 3
 visibility: public
 metadata:
   clawdbot:
@@ -14,7 +14,9 @@ metadata:
 
 Swap **any** B20 created by the TwentyPad Instant Launcher factory.
 
-Do **not** use Bankr's default swap / 0x / Uniswap aggregator path. Those routes usually cannot quote this custom v4 hook.
+Do **not** use Bankr's default swap / 0x / Uniswap aggregator path for the TwentyPad pool. Those routes usually cannot quote this custom v4 hook.
+
+The factory opens **one** pool per token: token/ETH **or** token/USDC. If the trader pays or wants the **other** asset, add an ETH↔USDC hop, then swap in the hook pool. Do not send ETH into a USDC hook pool.
 
 TFROG is an example, not a whitelist. If the token is missing from this file, resolve it on-chain or from the user's launch reply, then swap with the same pool key recipe.
 
@@ -29,6 +31,7 @@ TFROG is an example, not a whitelist. If the token is missing from this file, re
 | PoolManager | `0x498581fF718922c3f8e6A244956aF099B2652b2b` |
 | Universal Router | `0x6fF5693b99212Da76ad316178A184AB56D299b43` |
 | Permit2 | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
+| WETH (routing hop only) | `0x4200000000000000000000000000000000000006` |
 | Pool fee | `0` |
 | tickSpacing | `200` |
 | ETH quote | `0x0000000000000000000000000000000000000000` |
@@ -69,22 +72,24 @@ Confirm it is TwentyPad before swapping:
 
 If `tokenCreator(token)` is zero and there is no matching launch event, refuse. It is not this factory.
 
-Quote is ETH unless the launch said USDC or `Launched.quote` is the USDC address.
+Launch quote is ETH unless the launch said USDC or `Launched.quote` is the USDC address.
 
-## Build the pool key
+## Build the hook pool key
+
+Always built from the **launch quote**, never from what the trader paid.
 
 ```text
-currency0 = min(quote, token)   // native ETH is address(0), so ETH is always currency0
-currency1 = max(quote, token)
+currency0 = min(launchQuote, token)   // native ETH is address(0), so ETH is always currency0
+currency1 = max(launchQuote, token)
 fee       = 0
 tickSpacing = 200
 hooks     = 0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc
 ```
 
-Direction:
+Direction on the hook:
 
-- Buy token with quote → `zeroForOne = (quote == currency0)`
-- Sell token for quote → `zeroForOne = (token == currency0)`
+- Buy token with launch quote → `zeroForOne = (launchQuote == currency0)`
+- Sell token for launch quote → `zeroForOne = (token == currency0)`
 
 ETH / TFROG example:
 
@@ -92,6 +97,12 @@ ETH / TFROG example:
 - currency1 = TFROG
 - buy TFROG with ETH → `zeroForOne = true`
 - sell TFROG for ETH → `zeroForOne = false`
+
+USDC-paired example:
+
+- currency0 / currency1 = sort(USDC, token)
+- buy token with USDC → `zeroForOne = (USDC == currency0)`
+- hook currencies are USDC + token. Never put WETH or native ETH in this PoolKey if launch quote is USDC.
 
 If the user or launch reply includes `poolId`, optionally verify it equals `keccak256(abi.encode(poolKey))` / Uniswap v4 `PoolIdLibrary.toId`. If it mismatches, stop and report.
 
@@ -104,45 +115,72 @@ If the user or launch reply includes `poolId`, optionally verify it equals `kecc
 @bankrbot swap 0.002 ETH to 0xB200000000000000000000b821ECF2D823cb7ca7
 @bankrbot sell all TFROG
 @bankrbot buy 0.001 ETH of the b20 we just launched
+@bankrbot buy 0.001 ETH of SCRATCH
+@bankrbot sell 10000 SCRATCH for ETH
+@bankrbot sell 10000 SCRATCH for USDC
 ```
 
-| Intent | Input | Output |
-| --- | --- | --- |
-| buy / long / ape | launch quote (ETH or USDC) | B20 token |
-| sell | B20 token | launch quote |
+| Intent | Trader asset | Launch quote | Path |
+| --- | --- | --- | --- |
+| buy | ETH | ETH | direct hook |
+| buy | USDC | USDC | direct hook |
+| buy | ETH | USDC | **cross** ETH→USDC then hook |
+| buy | USDC | ETH | **cross** USDC→ETH then hook |
+| sell | wants ETH | ETH | direct hook |
+| sell | wants USDC | USDC | direct hook |
+| sell | wants ETH | USDC | **cross** hook then USDC→ETH |
+| sell | wants USDC | ETH | **cross** hook then ETH→USDC |
 
 Defaults:
 
 - chain = Base
-- only **exact-input**
-- slippage = 15% normally; 25%+ on a pool younger than a few minutes
-- “$N of TOKEN” → convert USD to quote using a spot price, then exact-in that quote amount
-- “sell all” → full token balance minus a tiny dust pad if needed for gas on ETH
+- hook leg is always **exact-input**
+- hook slippage = 15% normally; 25%+ on a pool younger than a few minutes
+- hop slippage (ETH↔USDC) = 0.5%
+- if the user says only “buy TOKEN” with no asset, pay the **launch quote** (direct)
+- if they say “buy N ETH of TOKEN” and the pool is USDC, use **cross** automatically — do not ask them to buy USDC first
+- “$N of TOKEN” → convert USD to USDC if launch quote is USDC (direct), or to ETH if launch quote is ETH (direct)
+- “sell all” → full token balance minus a tiny dust pad
+- “sell TOKEN” with no output asset → pay out the launch quote
+- “sell TOKEN for ETH” / “for USDC” → honor that; cross if needed
+
+## Route (pick this before encoding)
+
+1. Resolve `token` and `launchQuote`.
+2. Resolve `traderAsset` (what they pay on a buy, what they want on a sell).
+3. If `traderAsset == launchQuote` → **direct**.
+4. If they differ → **cross**.
+5. Quote both legs before sending. If either quote fails, stop.
+
+ETH↔USDC hop uses a **normal** Base ETH/USDC pool (v3 fee 500 / 0.05% or v4 ETH-USDC). Never use the TwentyPad hook for ETH↔USDC.
+
+WETH is only for that hop. TwentyPad ETH books still use **native ETH** (`address(0)`), not WETH.
 
 ## Hard rules
 
-1. Exact-output is blocked while anti-snipe fee is above 1% (starts at 99%, decays to 1% over ~20 seconds after launch). Always exact-input.
-2. Uniswap pool fee is `0`. The hook charges ~1% of the **quote** notional (plus anti-snipe surplus to the platform).
-3. Fresh pools are single-sided token liquidity. First buys can have large impact. Warn above ~0.01 ETH on a new pool.
+1. Exact-output is blocked on the hook while anti-snipe fee is above 1% (starts at 99%, decays to 1% over ~20 seconds after launch). Hook leg is always exact-input.
+2. Uniswap pool fee on the hook is `0`. The hook charges ~1% of the **launch-quote** notional (plus anti-snipe surplus to the platform).
+3. Fresh pools are single-sided token liquidity. First buys can have large impact. Warn above ~0.01 ETH (or ~$20 USDC) on a new pool.
 4. `hookData` = `0x`.
-5. ETH-quoted pools use **native ETH** (`address(0)`), not WETH. Do not wrap.
+5. ETH-quoted **hook** pools use native ETH (`address(0)`), not WETH. Do not wrap for a direct ETH hook swap.
 6. Selling the B20 requires ERC-20 approve / Permit2 to the Universal Router. Buying with native ETH does not.
-7. Do not multi-hop through WETH or USDC. Swap only in the launch pool.
+7. Same-asset → hook only. Different asset → ETH/USDC hop + hook. Never send ETH `value` into a USDC hook `V4_SWAP`.
 8. Do not add or remove LP. Liquidity is locked in the hook.
 
 ## Execution
 
-Preferred: Uniswap Universal Router on Base, command `V4_SWAP`, `EXACT_INPUT_SINGLE`.
+Preferred: Uniswap Universal Router on Base. One `execute(commands, inputs, deadline)` when possible.
 
-1. If selling the B20 and allowance is 0, approve the token to Permit2 and/or Universal Router.
-2. Submit:
+### Direct (trader asset == launch quote)
+
+Command `V4_SWAP` / `EXACT_INPUT_SINGLE` on the hook PoolKey.
 
 ```json
 {
   "to": "0x6fF5693b99212Da76ad316178A184AB56D299b43",
   "chainId": 8453,
   "value": "<amountIn wei if input is native ETH, else 0>",
-  "data": "<Universal Router execute(commands, inputs, deadline)>"
+  "data": "<Universal Router execute>"
 }
 ```
 
@@ -150,27 +188,56 @@ Preferred: Uniswap Universal Router on Base, command `V4_SWAP`, `EXACT_INPUT_SIN
 
 ```text
 poolKey: { currency0, currency1, fee: 0, tickSpacing: 200, hooks: launchHook }
-zeroForOne: <from direction above>
+zeroForOne: <hook direction>
 amountIn: <uint128>
-amountOutMinimum: <amountIn-quoted out after slippage>
+amountOutMinimum: <quoted out after hook slippage>
 hookData: 0x
 ```
 
-3. Wait for confirmation.
+### Cross — buy token with ETH, launch quote is USDC
 
-If the host cannot encode Universal Router, use any Bankr raw-tx path that accepts an explicit v4 PoolKey (hook + fee 0 + spacing 200). Never fall back to “buy TOKEN on Base” without the hook.
+1. Quote `amountEth → USDC` on ETH/USDC. `usdcIn = quotedUsdc * 0.995`.
+2. Quote hook `usdcIn → token`. `minTokenOut` after 15–25% slip.
+3. One UR `execute`, `value = amountEth`:
+   - wrap / v4 native ETH→USDC exact-in, `amountOutMin = usdcIn`
+   - `V4_SWAP` exact-in USDC→token on the hook (`amountIn = usdcIn`, `amountOutMinimum = minTokenOut`, `hookData = 0x`)
+   - sweep leftover WETH/USDC to the user
+4. Confirm text must say `routed ETH → USDC → TOKEN`.
+
+### Cross — sell token for ETH, launch quote is USDC
+
+1. Approve token to Permit2 / Universal Router.
+2. Quote hook `tokenIn → USDC`. `minUsdc` after hook slip.
+3. Quote `minUsdc → ETH` on ETH/USDC, 0.5% slip.
+4. One UR `execute`, `value = 0`:
+   - `V4_SWAP` exact-in token→USDC on the hook
+   - USDC→ETH/WETH exact-in
+   - unwrap WETH → native ETH, sweep to user
+
+### Cross — buy with USDC, launch quote is ETH
+
+`value = 0`. Permit2 USDC. Hop USDC→ETH, then hook ETH→token exact-in (native ETH as hook currency0).
+
+### Cross — sell for USDC, launch quote is ETH
+
+Hook token→ETH, then ETH→USDC, sweep USDC. `value = 0`.
+
+If batch encode fails, two txs in that order is allowed. Do not reverse the order.
+
+If the host cannot encode Universal Router, use any Bankr raw-tx path that accepts an explicit v4 PoolKey for the hook leg. Never fall back to “buy TOKEN on Base” without the hook.
 
 ## Confirm before the first swap on a token
 
 Reply with:
 
 - token address and symbol if known
-- quote (ETH or USDC)
+- launch quote (ETH or USDC)
+- trader asset (ETH or USDC)
+- path: `direct` or `ETH → USDC → TOKEN` / `TOKEN → USDC → ETH` / etc.
 - amount in and direction
-- zeroForOne
-- hook, fee 0, tickSpacing 200
+- hook zeroForOne, fee 0, tickSpacing 200
 - poolId if known
-- slippage
+- hook slippage and hop slippage
 - unaudited + impact warning
 
 Then broadcast.
@@ -180,10 +247,10 @@ Then broadcast.
 Reply with:
 
 - tx hash and Basescan link
-- amount in / amount out if logs exist
+- amount in / hop mid / amount out if logs exist
 - remaining token and quote balances
 - token Basescan: `https://basescan.org/token/{token}`
-- note: hook fee accrues in FeeEscrow, not as Uniswap LP fee
+- note: hook fee accrues in FeeEscrow in the **launch quote**, not as Uniswap LP fee
 
 ## Errors
 
@@ -191,8 +258,10 @@ Reply with:
 | --- | --- |
 | Token not on this factory | Refuse. Not a TwentyPad pool. |
 | Quote unknown | Read `Launched` or ask ETH vs USDC. |
-| Exact-output requested in anti-snipe window | Convert to exact-input or wait ~20s. |
-| Aggregator returns no route | Expected. Use this skill's PoolKey path. |
+| User pays ETH into USDC pool with no hop | Stop. Use cross route. |
+| Exact-output requested in anti-snipe window | Convert hook leg to exact-input or wait ~20s. |
+| Aggregator returns no route for the hook | Expected. Use this skill's PoolKey path. |
+| Hop1 or hook quote fails | Do not send. |
 | High impact / tiny out | Warn, reduce size, or raise slippage only if the user agrees. |
 
 ## What this skill does not do
@@ -209,4 +278,6 @@ Reply with:
 @bankrbot use b20-swap-skill to sell all TFROG
 @bankrbot use b20-swap-skill to buy 0.001 ETH of 0xB200000000000000000000b821ECF2D823cb7ca7
 @bankrbot use b20-swap-skill to sell 500000 of the b20 we just launched
+@bankrbot use b20-swap-skill to buy 0.001 ETH of SCRATCH
+@bankrbot use b20-swap-skill to sell 10000 SCRATCH for ETH
 ```

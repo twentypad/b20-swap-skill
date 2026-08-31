@@ -57,6 +57,7 @@ Resolve case-insensitive. `$` is optional.
 | Ticker / name | Token | Launch quote |
 | --- | --- | --- |
 | TFROG, $TFROG, TwentyFrog | `0xB200000000000000000000b821ECF2D823cb7ca7` | ETH |
+| ELMO, $ELMO, Cyber Elmo | `0xb2000000000000000000004047915DaE2f6f1cA7` | USDC |
 
 If the user says `$TFROG` or `TFROG`, use that row. Do not ask for the CA.
 
@@ -268,8 +269,25 @@ ELMO `0xb2000000000000000000004047915DaE2f6f1cA7` is **USDC**.
 ### Cross-quote only after direct works
 
 ETH→USDC hop = UR command `0x00` V3_SWAP_EXACT_IN on Base ETH/USDC fee 500, then command `0x10` hook swap.  
-If you cannot encode two commands, send two txs. Never put ETH in the hook PoolKey when launch quote is USDC.
-```
+
+### Cross-quote Bankr path (use this; do not ask the user to buy USDC by hand)
+
+If launch quote is USDC and the user pays ETH:
+
+1. Read USDC balance.
+2. If USDC == 0 or USDC < needed, **first tx**: Bankr default swap
+   `swap <ethIn> ETH to USDC on Base`
+   (ETH/USDC is a normal pool. Default routing is OK here.)
+3. Wait for that tx.
+4. **Second tx**: this skill, direct hook
+   `buy <usdcReceived> USDC of $ELMO`
+   Universal Router `V4_SWAP` only. PoolKey = sort(USDC, ELMO), fee 0, spacing 200, TwentyPad hook.
+   `value = 0`. Approve USDC / Permit2 if needed.
+5. Reply: `routed ETH → USDC → ELMO` + both hashes.
+
+Never send `value = ETH` to the ELMO hook. Never use default routing for ELMO itself.
+
+If launch quote is ETH and the user wants to pay USDC: default-swap USDC→ETH, then hook-buy with ETH (TFROG/ARGHH path).
 
 ### Direct (trader asset == launch quote)
 

@@ -171,10 +171,105 @@ WETH is only for that hop. TwentyPad ETH books still use **native ETH** (`addres
 6. Selling the B20 requires ERC-20 approve / Permit2 to the Universal Router. Buying with native ETH does not.
 7. Same-asset → hook only. Different asset → ETH/USDC hop + hook. Never send ETH `value` into a USDC hook `V4_SWAP`.
 8. Do not add or remove LP. Liquidity is locked in the hook.
+9. Never use Bankr's generic buy/swap tool for these tokens. If a previous generic buy failed, retry with the raw Universal Router tx above.
 
 ## Execution
 
-Preferred: Uniswap Universal Router on Base. One `execute(commands, inputs, deadline)` when possible.
+Do **not** call Bankr's built-in `swap` / `buy TOKEN` / 0x / Uniswap aggregator tools. Those have no TwentyPad hook and will fail or do nothing.
+
+Do **not** wait for a hook quote API. If you cannot quote, set `amountOutMinimum = 1` on small test buys (≤ 0.001 ETH) after warning about impact.
+
+Submit **one** Bankr wallet transaction:
+
+```text
+to:      0x6fF5693b99212Da76ad316178A184AB56D299b43
+chainId: 8453
+value:   <exact ETH wei on a direct ETH buy; else 0>
+data:    Universal Router execute(bytes commands, bytes[] inputs, uint256 deadline)
+```
+
+### How to encode (copy this, do not invent another router)
+
+`commands` = `0x10`  (V4_SWAP only, for a **direct** hook swap)
+
+V4 actions (3 bytes):
+
+```text
+SWAP_EXACT_IN_SINGLE = 0x06
+SETTLE_ALL           = 0x0c
+TAKE_ALL             = 0x0f
+```
+
+`actions = 0x060c0f`
+
+`inputs[0] = abi.encode(actions, params)` where `params` has 3 items:
+
+```text
+params[0] = abi.encode(
+  ExactInputSingleParams({
+    poolKey: { currency0, currency1, fee: 0, tickSpacing: 200, hooks: 0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc },
+    zeroForOne: <true if paying currency0>,
+    amountIn: <uint128>,
+    amountOutMinimum: <uint128, use 1 if unquoted small buy>,
+    hookData: 0x
+  })
+)
+params[1] = abi.encode(currencyIn, amountIn)       // SETTLE_ALL
+params[2] = abi.encode(currencyOut, amountOutMinimum) // TAKE_ALL
+```
+
+Then:
+
+```text
+deadline = now + 600
+data = encodeFunctionData("execute(bytes,bytes[],uint256)", [commands, [inputs0], deadline])
+```
+
+If `cast` exists:
+
+```bash
+# after you have POOL fields and AMOUNT_WEI
+cast calldata "execute(bytes,bytes[],uint256)" 0x10 "[<inputs0>]" $DEADLINE
+```
+
+Prefer viem `encodeFunctionData` + `@uniswap/v4-sdk` / `V4Planner` if the sandbox has them. Same actions: `SWAP_EXACT_IN_SINGLE`, `SETTLE_ALL`, `TAKE_ALL`.
+
+### Worked direct buy: 0.0001 ETH of TFROG
+
+This is the path that already succeeded.
+
+```text
+token      = 0xB200000000000000000000b821ECF2D823cb7ca7
+launchQuote = ETH = 0x0000000000000000000000000000000000000000
+currency0  = ETH
+currency1  = TFROG
+zeroForOne = true
+amountIn   = 100000000000000        # 0.0001 ETH
+amountOutMinimum = 1
+value      = 100000000000000
+to         = 0x6fF5693b99212Da76ad316178A184AB56D299b43
+```
+
+Same recipe for ARGHH `0xB2000000000000000000007D141A1bc1C5317Ca7` (ETH pair).
+
+### Worked direct buy: USDC-paired ELMO
+
+ELMO `0xb2000000000000000000004047915DaE2f6f1cA7` is **USDC**.  
+`buy 0.001 ETH of ELMO` is **cross** (see below).  
+`buy 1 USDC of ELMO` is direct: `value = 0`, Permit2 USDC, hook currencies = sort(USDC, ELMO).
+
+### If encoding fails
+
+1. Retry once with `amountOutMinimum = 1`.
+2. Do not switch to Bankr default swap.
+3. Reply: `could not encode Universal Router V4_SWAP (actions 0x060c0f)` and print the PoolKey you used.
+4. Cross-quote (ETH on USDC pool) is **optional**. If you cannot batch hops, say the pool is USDC and ask for a USDC amount. Do not block a **direct ETH** TFROG/ARGHH buy because of cross-quote.
+
+### Cross-quote only after direct works
+
+ETH→USDC hop = UR command `0x00` V3_SWAP_EXACT_IN on Base ETH/USDC fee 500, then command `0x10` hook swap.  
+If you cannot encode two commands, send two txs. Never put ETH in the hook PoolKey when launch quote is USDC.
+```
 
 ### Direct (trader asset == launch quote)
 

@@ -1,13 +1,8 @@
 ---
 name: b20-swap-skill
-description: Buy or sell any TwentyPad Instant Launcher B20 on Base Uniswap v4, including ETH on a USDC-paired token and USDC on an ETH-paired token via an ETH/USDC hop plus the hook pool. Use when the user wants to swap TFROG, TwentyFrog, a TwentyPad B20, a token from factory 0x15a3f3ABb733868d193b511dd5b91f82ebF888A3, or any B20 whose pool uses hook 0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc. Do not use Bankr default DEX routing for the TwentyPad leg.
+description: Buy or sell TwentyPad B20s on Base including $TFROG, TFROG, TwentyFrog, and any token from factory 0x15a3f3ABb733868d193b511dd5b91f82ebF888A3. Trigger on $TFROG or TFROG. Do not use default DEX routing for the hook pool.
 tags: [b20, base, swap, twentypad, uniswap-v4, tfrog, cross-quote]
-version: 3
 visibility: public
-metadata:
-  clawdbot:
-    emoji: "🔄"
-    homepage: "https://github.com/twentypad/b20-instant-launcher"
 ---
 
 # TwentyPad B20 Swap
@@ -55,15 +50,25 @@ From https://x.com/bankrbot/status/2094147138016186772
 
 Use this row only when the user means TFROG / TwentyFrog. For every other TwentyPad token, resolve dynamically.
 
+## Known tickers
+
+Resolve case-insensitive. `$` is optional.
+
+| Ticker / name | Token | Launch quote |
+| --- | --- | --- |
+| TFROG, $TFROG, TwentyFrog | `0xB200000000000000000000b821ECF2D823cb7ca7` | ETH |
+
+If the user says `$TFROG` or `TFROG`, use that row. Do not ask for the CA.
+
 ## Resolve the token (do not require a hardcoded list)
 
 Use the first match:
 
-1. User gave a token address.
-2. User said TFROG / TwentyFrog → use the example row above.
-3. User said “the B20 we just launched” / replied under a launch tweet → take `token`, `quote`, and `poolId` from that Bankr launch reply or from factory `Launched`.
-4. User gave a name/ticker only → look up recent `Launched` events on the factory, or factory `profiles(token)` / `tokenCreator(token)`.
-5. Still unknown → ask once for the token address or launch tx. Do not invent an address.
+1. User said TFROG / $TFROG / TwentyFrog → `0xB200000000000000000000b821ECF2D823cb7ca7`
+2. User gave another token address
+3. “the B20 we just launched” → launch reply / `Launched`
+4. Other name/ticker → factory events / `profiles` / `tokenCreator`
+5. Still unknown → ask once for the CA
 
 Confirm it is TwentyPad before swapping:
 
@@ -109,7 +114,7 @@ If the user or launch reply includes `poolId`, optionally verify it equals `kecc
 ## Parse the request
 
 ```
-@bankrbot buy $5 of TFROG
+@bankrbot buy $5 of $TFROG/TFROG
 @bankrbot buy 0.001 ETH of TwentyFrog
 @bankrbot sell 1000000 TFROG
 @bankrbot swap 0.002 ETH to 0xB200000000000000000000b821ECF2D823cb7ca7

@@ -189,6 +189,33 @@ value:   <exact ETH wei on a direct ETH buy; else 0>
 data:    Universal Router execute(bytes commands, bytes[] inputs, uint256 deadline)
 ```
 
+### Cross ETH → USDC-paired token (ELMO and any USDC launch)
+
+Do this in one turn. Do not stop after leg 1. Do not ask the user to buy USDC.
+
+Example: `buy 0.0001 ETH of $ELMO`
+
+1. Confirm launch quote is USDC
+   (`$ELMO` = `0xb2000000000000000000004047915DaE2f6f1cA7`).
+2. **Leg 1 — normal pool (Bankr default swap is OK):**
+   swap the ETH amount to USDC on Base.
+   Wait for the tx.
+3. **Leg 2a — if needed:**
+   `USDC.approve(Permit2 0x000000000022D473030F116dDEE9F6B43aC78BA3, max)`.
+4. **Leg 2b — if needed:**
+   `Permit2.approve(USDC, Universal Router 0x6fF5693b99212Da76ad316178A184AB56D299b43, amount, expiration)`.
+5. **Leg 2c — hook (required):**
+   Universal Router `V4_SWAP`, actions `0x060c0f`.
+   PoolKey = sort(USDC, token), fee 0, tickSpacing 200,
+   hooks `0x8c0986c564025903B0f1C7c87cBA1760cB4FAAcc`.
+   `value = 0`.
+   `amountIn` = USDC received (6 decimals).
+   `amountOutMinimum = 1` on small tests.
+6. Reply with ETH→USDC hash, hook hash, USDC spent, token out.
+
+An approve with no hook tx is not finished.
+Never send ETH `value` into the USDC hook pool.
+
 ### How to encode (copy this, do not invent another router)
 
 `commands` = `0x10`  (V4_SWAP only, for a **direct** hook swap)
